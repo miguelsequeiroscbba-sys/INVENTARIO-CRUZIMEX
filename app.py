@@ -25,7 +25,6 @@ BUCKET_NAME = "Archivos-inventario"
 # ---------------------------------------------------------
 def subir_archivo_supabase(bytes_data, nombre_destino):
     try:
-        # Se sube o reemplaza el archivo en el bucket
         supabase.storage.from_(BUCKET_NAME).upload(
             file=bytes_data,
             path=nombre_destino,
@@ -63,7 +62,7 @@ if menu == "🔍 Consultar Inventario Real":
     else:
         st.subheader("📊 Stock e Inventario Disponible")
         
-        col1, col2 = st.subplots(2)
+        col1, col2 = st.columns(2)
         with col1:
             st.info("✅ **Inventario Base**: Cargado activamente.")
         with col2:
