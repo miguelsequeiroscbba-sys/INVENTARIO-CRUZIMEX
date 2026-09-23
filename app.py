@@ -18,7 +18,7 @@ def init_supabase() -> Client:
     return create_client(url, key)
 
 supabase = init_supabase()
-BUCKET_NAME = "archivos-inventario"
+BUCKET_NAME = "Archivos-inventario"
 
 # ---------------------------------------------------------
 # Funciones para manejar archivos en Supabase Storage
