@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 import io
-from datetime import datetime
 
 st.set_page_config(
     page_title="Gestión de Inventario - Cruzimex",
@@ -41,7 +40,6 @@ def subir_archivo_supabase(bytes_data, nombre_destino):
         st.error(f"Error al subir el archivo {nombre_destino}: {e}")
         return False
 
-# Carga directa sin caché para evitar que muestre datos de ayer
 def cargar_excel_desde_supabase(nombre_archivo):
     try:
         data_bytes = supabase.storage.from_(BUCKET_NAME).download(nombre_archivo)
@@ -110,33 +108,25 @@ if menu == "🔍 Consultar Inventario Real":
             col_fecha = next((c for c in cols_vta if "FECHA" in str(c).upper()), None)
             
             if col_fecha:
-                # Convertir a datetime para poder comparar
                 df_ventas['__fecha_dt__'] = pd.to_datetime(df_ventas[col_fecha], errors='coerce', dayfirst=True)
-                
-                # Opción para filtrar por fecha
                 fechas_disponibles = sorted(df_ventas['__fecha_dt__'].dt.strftime('%d-%m-%Y').dropna().unique().tolist(), reverse=True)
                 
                 if fechas_disponibles:
                     with col_f_fecha:
                         fecha_seleccionada = st.selectbox("📅 Filtrar Preventas por Fecha:", options=fechas_disponibles, index=0)
                     
-                    # Filtrar dataframe de ventas
                     mask_fecha = df_ventas['__fecha_dt__'].dt.strftime('%d-%m-%Y') == fecha_seleccionada
                     df_ventas = df_ventas[mask_fecha]
 
-            # Buscar columnas específicas vistas en la imagen ("CÓDIGO ARTÍCULO" y "CANTIDAD")
             col_vta_cod = next((c for c in cols_vta if any(k in str(c).upper() for k in ["CÓDIGO ARTÍCULO", "CODIGO ARTICULO", "CÓDIGO", "COD", "ITEM"])), cols_vta[0])
             col_vta_cant = next((c for c in cols_vta if any(k in str(c).upper() for k in ["CANTIDAD", "CANT", "PEDIDO", "VENTA"])), cols_vta[-1])
             
-            # Limpiar datos de ventas
             df_ventas[col_vta_cant] = pd.to_numeric(df_ventas[col_vta_cant], errors='coerce').fillna(0)
             df_ventas['__key_vta_cod__'] = limpiar_codigo(df_ventas[col_vta_cod])
             
-            # Agrupar suma de ventas por código
             df_ventas_agrup = df_ventas.groupby('__key_vta_cod__')[col_vta_cant].sum().reset_index()
             df_ventas_agrup.rename(columns={col_vta_cant: 'Preventas Acumuladas'}, inplace=True)
             
-            # Unir (Merge) Inventario con Ventas
             df_resumen = pd.merge(
                 df_resumen, 
                 df_ventas_agrup, 
@@ -151,7 +141,6 @@ if menu == "🔍 Consultar Inventario Real":
         else:
             df_resumen['Preventas Acumuladas'] = 0
 
-        # Eliminar columna auxiliar de clave
         if '__key_cod__' in df_resumen.columns:
             df_resumen.drop(columns=['__key_cod__'], inplace=True)
 
@@ -171,7 +160,6 @@ if menu == "🔍 Consultar Inventario Real":
 
         df_resumen['Estado Stock'] = df_resumen.apply(calcular_estado, axis=1)
 
-        # Ordenar columnas para mostrar en pantalla
         cols_finales = [col_codigo]
         otras_cols = [c for c in df_resumen.columns if c not in [col_codigo, col_stock_ini, 'Preventas Acumuladas', 'Stock Disponible Real', 'Estado Stock']]
         cols_finales.extend(otras_cols)
@@ -194,10 +182,10 @@ if menu == "🔍 Consultar Inventario Real":
 
         st.markdown("---")
 
-        # Filtros
+        # Buscador principal
         col_f1, col_f2 = st.columns([2, 1])
         with col_f1:
-            busqueda = st.text_input("🔎 Buscar por código, descripción o cliente:")
+            busqueda = st.text_input("🔎 Buscar por código, descripción o cliente:", value="", key="busqueda_principal")
         with col_f2:
             filtro_estado = st.multiselect("Filtrar por Estado:", options=["🟢 Disponible", "🟡 Poco Stock", "🔴 Agotado", "⚠️ Quiebre de Stock"])
 
@@ -220,9 +208,26 @@ if menu == "🔍 Consultar Inventario Real":
             }
         )
 
-        if df_ventas is not None:
-            with st.expander("📄 Ver detalle del Excel de Preventas filtrado"):
-                st.dataframe(df_ventas, use_container_width=True)
+        # ---------------------------------------------------------
+        # Pestaña desplegable: Detalle de Preventas
+        # ---------------------------------------------------------
+        if df_ventas is not None and not df_ventas.empty:
+            with st.expander("📄 Ver detalle del Excel de Preventas (Clientes y Pedidos)", expanded=bool(busqueda)):
+                
+                # Ocultar columnas técnicas auxiliares
+                cols_para_ocultar = ['__fecha_dt__', '__key_vta_cod__']
+                cols_visibles = [c for c in df_ventas.columns if c not in cols_para_ocultar]
+                df_vta_vista = df_ventas[cols_visibles].copy()
+
+                col_b1, col_b2 = st.columns([2, 1])
+                with col_b1:
+                    busqueda_vta = st.text_input("🔎 Filtro específico para pedidos/clientes:", value=busqueda, key="busqueda_vta")
+                
+                if busqueda_vta:
+                    mask_vta = df_vta_vista.apply(lambda row: row.astype(str).str.contains(busqueda_vta, case=False).any(), axis=1)
+                    df_vta_vista = df_vta_vista[mask_vta]
+
+                st.dataframe(df_vta_vista, use_container_width=True)
 
 # ---------------------------------------------------------
 # VISTA 2: Panel de Administración (Subida de Excels)
