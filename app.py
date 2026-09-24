@@ -44,7 +44,6 @@ def cargar_excel_desde_supabase(nombre_archivo):
     try:
         data_bytes = supabase.storage.from_(BUCKET_NAME).download(nombre_archivo)
         
-        # Intentos de lectura según formato
         try:
             df = pd.read_excel(io.BytesIO(data_bytes))
         except Exception:
@@ -54,15 +53,16 @@ def cargar_excel_desde_supabase(nombre_archivo):
                 df = pd.read_html(io.BytesIO(data_bytes))[0]
                 
         return df
-    except Exception as e:
+    except Exception:
         return None
 
-# Función auxiliar para limpiar y homogenizar códigos
-def normalizar_codigo(serie):
+# Función de limpieza y homogeinización exacta de códigos
+def limpiar_codigo(serie):
     return (
         serie.astype(str)
         .str.replace(r'\.0$', '', regex=True)
         .str.strip()
+        .str.lstrip('0')
         .str.upper()
     )
 
@@ -91,29 +91,39 @@ if menu == "🔍 Consultar Inventario Real":
             
         df_resumen = df_inv.copy()
         
-        # Identificar dinámicamente columnas clave de inventario
+        # 1. Identificar columnas de Inventario Base
         cols_inv = df_resumen.columns.tolist()
-        col_codigo = next((c for c in cols_inv if any(k in str(c).lower() for k in ["codigo", "cod", "item", "material"])), cols_inv[0])
-        col_stock_ini = next((c for c in cols_inv if any(k in str(c).lower() for k in ["stock", "cant", "saldo", "exist", "actual"])), cols_inv[-1])
+        col_codigo = next((c for c in cols_inv if any(k in str(c).upper() for k in ["COD", "CÓDIGO", "ITEM", "MATERIAL"])), cols_inv[0])
+        col_stock_ini = next((c for c in cols_inv if any(k in str(c).upper() for k in ["CANT", "STOCK", "SALDO", "EXIST"])), cols_inv[-1])
         
+        # Formatear números y clave de inventario
         df_resumen[col_stock_ini] = pd.to_numeric(df_resumen[col_stock_ini], errors='coerce').fillna(0)
-        # Normalizar la columna clave a string para evitar errores de tipo en el merge
-        df_resumen['__key_codigo__'] = normalizar_codigo(df_resumen[col_codigo])
+        df_resumen['__key_cod__'] = limpiar_codigo(df_resumen[col_codigo])
         
-        # Procesar Ventas/Preventas si están cargadas
+        # 2. Identificar columnas de Ventas Consolidadas
         if df_ventas is not None and not df_ventas.empty:
             cols_vta = df_ventas.columns.tolist()
-            col_vta_cod = next((c for c in cols_vta if any(k in str(c).lower() for k in ["codigo", "cod", "item", "material"])), cols_vta[0])
-            col_vta_cant = next((c for c in cols_vta if any(k in str(c).lower() for k in ["cant", "pedid", "vta", "unid", "solic"])), cols_vta[-1])
             
+            # Buscar columnas específicas vistas en la imagen ("CÓDIGO ARTÍCULO" y "CANTIDAD")
+            col_vta_cod = next((c for c in cols_vta if any(k in str(c).upper() for k in ["CÓDIGO ARTÍCULO", "CODIGO ARTICULO", "CÓDIGO", "COD", "ITEM"])), cols_vta[0])
+            col_vta_cant = next((c for c in cols_vta if any(k in str(c).upper() for k in ["CANTIDAD", "CANT", "PEDIDO", "VENTA"])), cols_vta[-1])
+            
+            # Limpiar datos de ventas
             df_ventas[col_vta_cant] = pd.to_numeric(df_ventas[col_vta_cant], errors='coerce').fillna(0)
-            df_ventas['__key_vta_cod__'] = normalizar_codigo(df_ventas[col_vta_cod])
+            df_ventas['__key_vta_cod__'] = limpiar_codigo(df_ventas[col_vta_cod])
             
+            # Agrupar suma de ventas por código
             df_ventas_agrup = df_ventas.groupby('__key_vta_cod__')[col_vta_cant].sum().reset_index()
             df_ventas_agrup.rename(columns={col_vta_cant: 'Preventas Acumuladas'}, inplace=True)
             
-            # Cruce seguro con ambos lados en tipo String
-            df_resumen = pd.merge(df_resumen, df_ventas_agrup, left_on='__key_codigo__', right_on='__key_vta_cod__', how='left')
+            # Unir (Merge) Inventario con Ventas
+            df_resumen = pd.merge(
+                df_resumen, 
+                df_ventas_agrup, 
+                left_on='__key_cod__', 
+                right_on='__key_vta_cod__', 
+                how='left'
+            )
             df_resumen['Preventas Acumuladas'] = df_resumen['Preventas Acumuladas'].fillna(0)
             
             if '__key_vta_cod__' in df_resumen.columns:
@@ -121,13 +131,13 @@ if menu == "🔍 Consultar Inventario Real":
         else:
             df_resumen['Preventas Acumuladas'] = 0
 
-        # Eliminar la clave auxiliar de cruce
-        df_resumen.drop(columns=['__key_codigo__'], inplace=True)
+        # Eliminar columna auxiliar de clave
+        if '__key_cod__' in df_resumen.columns:
+            df_resumen.drop(columns=['__key_cod__'], inplace=True)
 
-        # Cálculo del disponible real
+        # 3. Cálculos finales
         df_resumen['Stock Disponible Real'] = df_resumen[col_stock_ini] - df_resumen['Preventas Acumuladas']
 
-        # Definir semáforo de estado
         def calcular_estado(row):
             disponible = row['Stock Disponible Real']
             if disponible < 0:
@@ -141,14 +151,14 @@ if menu == "🔍 Consultar Inventario Real":
 
         df_resumen['Estado Stock'] = df_resumen.apply(calcular_estado, axis=1)
 
-        # Reordenar columnas visualmente
+        # Ordenar columnas para mostrar en pantalla
         cols_finales = [col_codigo]
         otras_cols = [c for c in df_resumen.columns if c not in [col_codigo, col_stock_ini, 'Preventas Acumuladas', 'Stock Disponible Real', 'Estado Stock']]
         cols_finales.extend(otras_cols)
         cols_finales.extend([col_stock_ini, 'Preventas Acumuladas', 'Stock Disponible Real', 'Estado Stock'])
         df_resumen = df_resumen[cols_finales]
 
-        # Métricas principales
+        # Tarjetas Métricas
         total_prod = len(df_resumen)
         cant_disp = len(df_resumen[df_resumen['Estado Stock'] == "🟢 Disponible"])
         cant_poco = len(df_resumen[df_resumen['Estado Stock'] == "🟡 Poco Stock"])
@@ -167,7 +177,7 @@ if menu == "🔍 Consultar Inventario Real":
         # Filtros
         col_f1, col_f2 = st.columns([2, 1])
         with col_f1:
-            busqueda = st.text_input("🔎 Buscar por código, descripción o familia:")
+            busqueda = st.text_input("🔎 Buscar por código, descripción o cliente:")
         with col_f2:
             filtro_estado = st.multiselect("Filtrar por Estado:", options=["🟢 Disponible", "🟡 Poco Stock", "🔴 Agotado", "⚠️ Quiebre de Stock"])
 
@@ -184,14 +194,14 @@ if menu == "🔍 Consultar Inventario Real":
             df_mostrar,
             use_container_width=True,
             column_config={
-                "Estado Stock": st.column_config.TextColumn("Estado", help="Disponibilidad actual del producto"),
+                "Estado Stock": st.column_config.TextColumn("Estado"),
                 "Stock Disponible Real": st.column_config.NumberColumn("Stock Disponible Real", format="%d"),
                 "Preventas Acumuladas": st.column_config.NumberColumn("Preventas Acumuladas", format="%d")
             }
         )
 
         if df_ventas is not None:
-            with st.expander("📄 Ver detalle consolidado de Ventas/Preventas cargadas"):
+            with st.expander("📄 Ver detalle del Excel de Preventas cargado"):
                 st.dataframe(df_ventas, use_container_width=True)
 
 # ---------------------------------------------------------
@@ -209,26 +219,24 @@ elif menu == "⚙️ Panel de Administración":
         
         with tab1:
             st.markdown("#### Subir Inventario Base Inicial")
-            st.caption("Este archivo se sube idealmente al iniciar el turno/día.")
             file_inv = st.file_uploader("Selecciona el Excel de Inventario Base", type=["xlsx", "xls"], key="inv_up")
             if file_inv is not None:
                 if st.button("🚀 Actualizar Inventario Base"):
                     with st.spinner("Subiendo Inventario Base..."):
                         if subir_archivo_supabase(file_inv.getvalue(), "inventario_base.xlsx"):
                             st.cache_data.clear()
-                            st.success("¡Inventario Base actualizado correctamente en la nube!")
+                            st.success("¡Inventario Base actualizado correctamente!")
                             st.balloons()
 
         with tab2:
             st.markdown("#### Subir / Actualizar Ventas Consolidadas")
-            st.caption("Sube este reporte cada vez que descargues las ventas/pedidos de los preventistas para actualizar el saldo disponible.")
             file_ventas = st.file_uploader("Selecciona el Excel de Ventas Consolidadas", type=["xlsx", "xls"], key="ventas_up")
             if file_ventas is not None:
                 if st.button("🔄 Actualizar Ventas del Día"):
                     with st.spinner("Actualizando Ventas del Día..."):
                         if subir_archivo_supabase(file_ventas.getvalue(), "ventas_consolidadas.xlsx"):
                             st.cache_data.clear()
-                            st.success("¡Ventas del Día actualizadas correctamente en la nube!")
+                            st.success("¡Ventas actualizadas correctamente!")
                             st.balloons()
                             
     elif password:
