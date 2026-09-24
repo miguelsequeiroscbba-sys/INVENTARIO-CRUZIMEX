@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 import io
+from datetime import datetime
 
 st.set_page_config(
     page_title="Gestión de Inventario - Cruzimex",
@@ -20,7 +21,7 @@ def init_supabase() -> Client:
 
 supabase = init_supabase()
 
-BUCKET_NAME = "Archivos-inventario"
+BUCKET_NAME = "Archivos-inentario"
 
 # ---------------------------------------------------------
 # Funciones para manejar archivos en Supabase Storage
@@ -40,6 +41,7 @@ def subir_archivo_supabase(bytes_data, nombre_destino):
         st.error(f"Error al subir el archivo {nombre_destino}: {e}")
         return False
 
+# Carga directa sin caché para evitar que muestre datos de ayer
 def cargar_excel_desde_supabase(nombre_archivo):
     try:
         data_bytes = supabase.storage.from_(BUCKET_NAME).download(nombre_archivo)
@@ -56,7 +58,7 @@ def cargar_excel_desde_supabase(nombre_archivo):
     except Exception:
         return None
 
-# Función de limpieza y homogeinización exacta de códigos
+# Función de limpieza y homogeneización exacta de códigos
 def limpiar_codigo(serie):
     return (
         serie.astype(str)
@@ -85,7 +87,7 @@ if menu == "🔍 Consultar Inventario Real":
     else:
         st.subheader("📊 Control y Estado de Stock Real")
         
-        col_lim, col_blank = st.columns([1.5, 2.5])
+        col_lim, col_f_fecha = st.columns([1.5, 2.5])
         with col_lim:
             limite_bajo_stock = st.number_input("⚙️ Umbral para alertar Poco Stock (unidades):", min_value=1, value=5, step=1)
             
@@ -100,10 +102,28 @@ if menu == "🔍 Consultar Inventario Real":
         df_resumen[col_stock_ini] = pd.to_numeric(df_resumen[col_stock_ini], errors='coerce').fillna(0)
         df_resumen['__key_cod__'] = limpiar_codigo(df_resumen[col_codigo])
         
-        # 2. Identificar columnas de Ventas Consolidadas
+        # 2. Identificar columnas de Ventas Consolidadas y Filtrar
         if df_ventas is not None and not df_ventas.empty:
             cols_vta = df_ventas.columns.tolist()
             
+            # Buscar columna de fecha si existe para filtrar solo HOY o la fecha más reciente
+            col_fecha = next((c for c in cols_vta if "FECHA" in str(c).upper()), None)
+            
+            if col_fecha:
+                # Convertir a datetime para poder comparar
+                df_ventas['__fecha_dt__'] = pd.to_datetime(df_ventas[col_fecha], errors='coerce', dayfirst=True)
+                
+                # Opción para filtrar por fecha
+                fechas_disponibles = sorted(df_ventas['__fecha_dt__'].dt.strftime('%d-%m-%Y').dropna().unique().tolist(), reverse=True)
+                
+                if fechas_disponibles:
+                    with col_f_fecha:
+                        fecha_seleccionada = st.selectbox("📅 Filtrar Preventas por Fecha:", options=fechas_disponibles, index=0)
+                    
+                    # Filtrar dataframe de ventas
+                    mask_fecha = df_ventas['__fecha_dt__'].dt.strftime('%d-%m-%Y') == fecha_seleccionada
+                    df_ventas = df_ventas[mask_fecha]
+
             # Buscar columnas específicas vistas en la imagen ("CÓDIGO ARTÍCULO" y "CANTIDAD")
             col_vta_cod = next((c for c in cols_vta if any(k in str(c).upper() for k in ["CÓDIGO ARTÍCULO", "CODIGO ARTICULO", "CÓDIGO", "COD", "ITEM"])), cols_vta[0])
             col_vta_cant = next((c for c in cols_vta if any(k in str(c).upper() for k in ["CANTIDAD", "CANT", "PEDIDO", "VENTA"])), cols_vta[-1])
@@ -201,7 +221,7 @@ if menu == "🔍 Consultar Inventario Real":
         )
 
         if df_ventas is not None:
-            with st.expander("📄 Ver detalle del Excel de Preventas cargado"):
+            with st.expander("📄 Ver detalle del Excel de Preventas filtrado"):
                 st.dataframe(df_ventas, use_container_width=True)
 
 # ---------------------------------------------------------
@@ -225,6 +245,7 @@ elif menu == "⚙️ Panel de Administración":
                     with st.spinner("Subiendo Inventario Base..."):
                         if subir_archivo_supabase(file_inv.getvalue(), "inventario_base.xlsx"):
                             st.cache_data.clear()
+                            st.cache_resource.clear()
                             st.success("¡Inventario Base actualizado correctamente!")
                             st.balloons()
 
@@ -236,8 +257,6 @@ elif menu == "⚙️ Panel de Administración":
                     with st.spinner("Actualizando Ventas del Día..."):
                         if subir_archivo_supabase(file_ventas.getvalue(), "ventas_consolidadas.xlsx"):
                             st.cache_data.clear()
+                            st.cache_resource.clear()
                             st.success("¡Ventas actualizadas correctamente!")
                             st.balloons()
-                            
-    elif password:
-        st.error("Contraseña incorrecta.")
