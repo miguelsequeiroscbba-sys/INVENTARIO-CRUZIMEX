@@ -20,7 +20,7 @@ def init_supabase() -> Client:
 
 supabase = init_supabase()
 
-BUCKET_NAME = "ARCHIVOS-INVENTARIO"
+BUCKET_NAME = "Archivos-inventario"
 
 # ---------------------------------------------------------
 # Funciones para manejar archivos en Supabase Storage
