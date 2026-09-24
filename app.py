@@ -21,7 +21,7 @@ def init_supabase() -> Client:
 supabase = init_supabase()
 
 # BUCKET_NAME: Debe coincidir exactamente con el de Supabase
-BUCKET_NAME = "Archivos-inventario"
+BUCKET_NAME = "ARCHIVOS-INVENTARIO"
 
 # ---------------------------------------------------------
 # Funciones para manejar archivos en Supabase Storage
@@ -32,7 +32,7 @@ def subir_archivo_supabase(bytes_data, nombre_destino):
             file=bytes_data,
             path=nombre_destino,
             file_options={
-                "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "content-type": "application/octet-stream",
                 "upsert": "true"
             }
         )
@@ -44,9 +44,21 @@ def subir_archivo_supabase(bytes_data, nombre_destino):
 def cargar_excel_desde_supabase(nombre_archivo):
     try:
         data_bytes = supabase.storage.from_(BUCKET_NAME).download(nombre_archivo)
-        df = pd.read_excel(io.BytesIO(data_bytes))
+        
+        # Tentativa 1: Leer como Excel moderno (.xlsx)
+        try:
+            df = pd.read_excel(io.BytesIO(data_bytes))
+        except Exception:
+            # Tentativa 2: Leer como Excel antiguo (.xls)
+            try:
+                df = pd.read_excel(io.BytesIO(data_bytes), engine='xlrd')
+            except Exception:
+                # Tentativa 3: Leer como reporte HTML con extensión .xls
+                df = pd.read_html(io.BytesIO(data_bytes))[0]
+                
         return df
     except Exception as e:
+        st.error(f"Error al leer {nombre_archivo}: {e}")
         return None
 
 # ---------------------------------------------------------
