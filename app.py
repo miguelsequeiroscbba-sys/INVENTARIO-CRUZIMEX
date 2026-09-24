@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
+import io
 
 st.set_page_config(
     page_title="Gestión de Inventario - Cruzimex",
@@ -18,7 +19,9 @@ def init_supabase() -> Client:
     return create_client(url, key)
 
 supabase = init_supabase()
-BUCKET_NAME = "Archivos-inventario"
+
+# BUCKET_NAME: Debe coincidir exactamente con el de Supabase
+BUCKET_NAME = "ARCHIVOS-INVENTARIO"
 
 # ---------------------------------------------------------
 # Funciones para manejar archivos en Supabase Storage
@@ -28,7 +31,10 @@ def subir_archivo_supabase(bytes_data, nombre_destino):
         supabase.storage.from_(BUCKET_NAME).upload(
             file=bytes_data,
             path=nombre_destino,
-            file_options={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "upsert": "true"}
+            file_options={
+                "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "upsert": "true"
+            }
         )
         return True
     except Exception as e:
@@ -37,8 +43,8 @@ def subir_archivo_supabase(bytes_data, nombre_destino):
 
 def cargar_excel_desde_supabase(nombre_archivo):
     try:
-        url = supabase.storage.from_(BUCKET_NAME).get_public_url(nombre_archivo)
-        df = pd.read_excel(url)
+        data_bytes = supabase.storage.from_(BUCKET_NAME).download(nombre_archivo)
+        df = pd.read_excel(io.BytesIO(data_bytes))
         return df
     except Exception as e:
         return None
@@ -60,31 +66,107 @@ if menu == "🔍 Consultar Inventario Real":
     if df_inv is None:
         st.warning("⚠️ Todavía no se ha cargado el **Inventario Base**. El administrador debe subirlo en el Panel de Administración.")
     else:
-        st.subheader("📊 Stock e Inventario Disponible")
+        st.subheader("📊 Control y Estado de Stock Real")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.info("✅ **Inventario Base**: Cargado activamente.")
-        with col2:
-            if df_ventas is not None:
-                st.info("🔄 **Ventas del Día**: Registradas y descontadas.")
-            else:
-                st.warning("ℹ️ **Ventas del Día**: Sin reportes de ventas aún (mostrando inventario base completo).")
+        # Umbral para alertar poco stock
+        col_lim, col_blank = st.columns([1.5, 2.5])
+        with col_lim:
+            limite_bajo_stock = st.number_input("⚙️ Umbral para alertar Poco Stock (unidades):", min_value=1, value=5, step=1)
+            
+        df_resumen = df_inv.copy()
         
-        # Mostrar tabla principal
-        st.markdown("---")
-        busqueda = st.text_input("🔎 Buscar por código de producto, descripción o familia:")
+        # Identificar dinámicamente columnas clave de código y stock inicial
+        cols_inv = df_resumen.columns.tolist()
+        col_codigo = next((c for c in cols_inv if "codigo" in str(c).lower() or "cod" in str(c).lower() or "item" in str(c).lower()), cols_inv[0])
+        col_stock_ini = next((c for c in cols_inv if "stock" in str(c).lower() or "cant" in str(c).lower() or "saldo" in str(c).lower() or "exist" in str(c).lower()), cols_inv[-1])
         
-        if busqueda:
-            mask = df_inv.apply(lambda row: row.astype(str).str.contains(busqueda, case=False).any(), axis=1)
-            df_filtrado = df_inv[mask]
-            st.write(f"Resultados encontrados: **{len(df_filtrado)}**")
-            st.dataframe(df_filtrado, use_container_width=True)
+        df_resumen[col_stock_ini] = pd.to_numeric(df_resumen[col_stock_ini], errors='coerce').fillna(0)
+        
+        # Procesar Preventas si se subieron
+        if df_ventas is not None:
+            cols_vta = df_ventas.columns.tolist()
+            col_vta_cod = next((c for c in cols_vta if "codigo" in str(c).lower() or "cod" in str(c).lower() or "item" in str(c).lower()), cols_vta[0])
+            col_vta_cant = next((c for c in cols_vta if "cant" in str(c).lower() or "pedid" in str(c).lower() or "vta" in str(c).lower() or "unid" in str(c).lower()), cols_vta[-1])
+            
+            df_ventas[col_vta_cant] = pd.to_numeric(df_ventas[col_vta_cant], errors='coerce').fillna(0)
+            df_ventas_agrup = df_ventas.groupby(col_vta_cod)[col_vta_cant].sum().reset_index()
+            df_ventas_agrup.rename(columns={col_vta_cant: 'Preventas Acumuladas'}, inplace=True)
+            
+            df_resumen = pd.merge(df_resumen, df_ventas_agrup, left_on=col_codigo, right_on=col_vta_cod, how='left')
+            df_resumen['Preventas Acumuladas'] = df_resumen['Preventas Acumuladas'].fillna(0)
+            if col_vta_cod in df_resumen.columns and col_vta_cod != col_codigo:
+                df_resumen.drop(columns=[col_vta_cod], inplace=True)
         else:
-            st.dataframe(df_inv, use_container_width=True)
+            df_resumen['Preventas Acumuladas'] = 0
+
+        # Cálculo de Existencia Real Disponible
+        df_resumen['Stock Disponible Real'] = df_resumen[col_stock_ini] - df_resumen['Preventas Acumuladas']
+
+        # Regla para definir el Estado del Producto
+        def calcular_estado(row):
+            disponible = row['Stock Disponible Real']
+            if disponible < 0:
+                return "⚠️ Quiebre de Stock"
+            elif disponible == 0:
+                return "🔴 Agotado"
+            elif disponible <= limite_bajo_stock:
+                return "🟡 Poco Stock"
+            else:
+                return "🟢 Disponible"
+
+        df_resumen['Estado Stock'] = df_resumen.apply(calcular_estado, axis=1)
+
+        # Reordenar columnas visuales para destacar el Estado y el Disponible
+        cols_finales = [col_codigo]
+        otras_cols = [c for c in df_resumen.columns if c not in [col_codigo, col_stock_ini, 'Preventas Acumuladas', 'Stock Disponible Real', 'Estado Stock']]
+        cols_finales.extend(otras_cols)
+        cols_finales.extend([col_stock_ini, 'Preventas Acumuladas', 'Stock Disponible Real', 'Estado Stock'])
+        df_resumen = df_resumen[cols_finales]
+
+        # Métricas principales superiores
+        total_prod = len(df_resumen)
+        cant_disp = len(df_resumen[df_resumen['Estado Stock'] == "🟢 Disponible"])
+        cant_poco = len(df_resumen[df_resumen['Estado Stock'] == "🟡 Poco Stock"])
+        cant_agotado = len(df_resumen[df_resumen['Estado Stock'] == "🔴 Agotado"])
+        cant_quiebre = len(df_resumen[df_resumen['Estado Stock'] == "⚠️ Quiebre de Stock"])
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total Items", total_prod)
+        m2.metric("🟢 Disponibles", cant_disp)
+        m3.metric("🟡 Poco Stock", cant_poco)
+        m4.metric("🔴 Agotados", cant_agotado)
+        m5.metric("⚠️ Quiebres", cant_quiebre)
+
+        st.markdown("---")
+
+        # Filtros interactivos
+        col_f1, col_f2 = st.columns([2, 1])
+        with col_f1:
+            busqueda = st.text_input("🔎 Buscar por código, descripción o familia:")
+        with col_f2:
+            filtro_estado = st.multiselect("Filtrar por Estado:", options=["🟢 Disponible", "🟡 Poco Stock", "🔴 Agotado", "⚠️ Quiebre de Stock"])
+
+        df_mostrar = df_resumen.copy()
+
+        if filtro_estado:
+            df_mostrar = df_mostrar[df_mostrar['Estado Stock'].isin(filtro_estado)]
+
+        if busqueda:
+            mask = df_mostrar.apply(lambda row: row.astype(str).str.contains(busqueda, case=False).any(), axis=1)
+            df_mostrar = df_mostrar[mask]
+
+        st.dataframe(
+            df_mostrar,
+            use_container_width=True,
+            column_config={
+                "Estado Stock": st.column_config.TextColumn("Estado", help="Disponibilidad actual del producto"),
+                "Stock Disponible Real": st.column_config.NumberColumn("Stock Disponible Real", format="%d"),
+                "Preventas Acumuladas": st.column_config.NumberColumn("Preventas Acumuladas", format="%d")
+            }
+        )
 
         if df_ventas is not None:
-            with st.expander("📄 Ver detalle de Ventas Consolidadas Acumuladas"):
+            with st.expander("📄 Ver detalle consolidado de Ventas/Preventas cargadas"):
                 st.dataframe(df_ventas, use_container_width=True)
 
 # ---------------------------------------------------------
@@ -109,6 +191,7 @@ elif menu == "⚙️ Panel de Administración":
                 if st.button("🚀 Actualizar Inventario Base"):
                     with st.spinner("Subiendo Inventario Base..."):
                         if subir_archivo_supabase(file_inv.getvalue(), "inventario_base.xlsx"):
+                            st.cache_data.clear()
                             st.success("¡Inventario Base actualizado correctamente en la nube!")
                             st.balloons()
 
@@ -121,6 +204,7 @@ elif menu == "⚙️ Panel de Administración":
                 if st.button("🔄 Actualizar Ventas del Día"):
                     with st.spinner("Actualizando Ventas del Día..."):
                         if subir_archivo_supabase(file_ventas.getvalue(), "ventas_consolidadas.xlsx"):
+                            st.cache_data.clear()
                             st.success("¡Ventas del Día actualizadas correctamente en la nube!")
                             st.balloons()
                             
