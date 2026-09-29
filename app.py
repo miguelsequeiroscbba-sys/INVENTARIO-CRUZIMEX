@@ -141,9 +141,6 @@ if menu == "🔍 Consultar Inventario Real":
         else:
             df_resumen['Preventas Acumuladas'] = 0
 
-        if '__key_cod__' in df_resumen.columns:
-            df_resumen.drop(columns=['__key_cod__'], inplace=True)
-
         # 3. Cálculos finales
         df_resumen['Stock Disponible Real'] = df_resumen[col_stock_ini] - df_resumen['Preventas Acumuladas']
 
@@ -159,6 +156,12 @@ if menu == "🔍 Consultar Inventario Real":
                 return "🟢 Disponible"
 
         df_resumen['Estado Stock'] = df_resumen.apply(calcular_estado, axis=1)
+
+        # Mapa de Código -> Estado para enriquecer la vista de detalle
+        mapa_estados = dict(zip(df_resumen['__key_cod__'], df_resumen['Estado Stock']))
+
+        if '__key_cod__' in df_resumen.columns:
+            df_resumen.drop(columns=['__key_cod__'], inplace=True)
 
         cols_finales = [col_codigo]
         otras_cols = [c for c in df_resumen.columns if c not in [col_codigo, col_stock_ini, 'Preventas Acumuladas', 'Stock Disponible Real', 'Estado Stock']]
@@ -187,7 +190,7 @@ if menu == "🔍 Consultar Inventario Real":
         with col_f1:
             busqueda = st.text_input("🔎 Buscar por código, descripción o cliente:", value="", key="busqueda_principal")
         with col_f2:
-            filtro_estado = st.multiselect("Filtrar por Estado:", options=["🟢 Disponible", "🟡 Poco Stock", "🔴 Agotado", "⚠️ Quiebre de Stock"])
+            filtro_estado = st.multiselect("Filtrar por Estado:", options=["🟢 Disponible", "🟡 Poco Stock", "🔴 Agotado", "⚠️ Quiebre de Stock"], key="filtro_estado_principal")
 
         df_mostrar = df_resumen.copy()
 
@@ -214,20 +217,48 @@ if menu == "🔍 Consultar Inventario Real":
         if df_ventas is not None and not df_ventas.empty:
             with st.expander("📄 Ver detalle del Excel de Preventas (Clientes y Pedidos)", expanded=bool(busqueda)):
                 
+                # Asignamos el Estado según el código mapeado
+                df_vta_vista = df_ventas.copy()
+                df_vta_vista['Estado'] = df_vta_vista['__key_vta_cod__'].map(mapa_estados).fillna("🟢 Disponible")
+
                 # Ocultar columnas técnicas auxiliares
                 cols_para_ocultar = ['__fecha_dt__', '__key_vta_cod__']
-                cols_visibles = [c for c in df_ventas.columns if c not in cols_para_ocultar]
-                df_vta_vista = df_ventas[cols_visibles].copy()
+                cols_visibles = [c for c in df_vta_vista.columns if c not in cols_para_ocultar]
+                df_vta_vista = df_vta_vista[cols_visibles]
 
+                # Reordenar para poner la columna 'Estado' al final
+                if 'Estado' in df_vta_vista.columns:
+                    cols_sin_estado = [c for c in df_vta_vista.columns if c != 'Estado']
+                    df_vta_vista = df_vta_vista[cols_sin_estado + ['Estado']]
+
+                # Controles de búsqueda y filtro por estado
                 col_b1, col_b2 = st.columns([2, 1])
                 with col_b1:
                     busqueda_vta = st.text_input("🔎 Filtro específico para pedidos/clientes:", value=busqueda, key="busqueda_vta")
+                with col_b2:
+                    filtro_estado_vta = st.multiselect(
+                        "Filtrar por Estado:",
+                        options=["🟢 Disponible", "🟡 Poco Stock", "🔴 Agotado", "⚠️️ Quiebre de Stock"],
+                        default=[],
+                        key="filtro_estado_vta"
+                    )
                 
+                # Aplicar filtro por estado
+                if filtro_estado_vta:
+                    df_vta_vista = df_vta_vista[df_vta_vista['Estado'].isin(filtro_estado_vta)]
+
+                # Aplicar búsqueda por texto
                 if busqueda_vta:
                     mask_vta = df_vta_vista.apply(lambda row: row.astype(str).str.contains(busqueda_vta, case=False).any(), axis=1)
                     df_vta_vista = df_vta_vista[mask_vta]
 
-                st.dataframe(df_vta_vista, use_container_width=True)
+                st.dataframe(
+                    df_vta_vista,
+                    use_container_width=True,
+                    column_config={
+                        "Estado": st.column_config.TextColumn("Estado")
+                    }
+                )
 
 # ---------------------------------------------------------
 # VISTA 2: Panel de Administración (Subida de Excels)
