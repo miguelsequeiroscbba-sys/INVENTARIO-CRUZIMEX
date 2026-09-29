@@ -104,7 +104,7 @@ if menu == "🔍 Consultar Inventario Real":
         if df_ventas is not None and not df_ventas.empty:
             cols_vta = df_ventas.columns.tolist()
             
-            # Buscar columna de fecha si existe para filtrar solo HOY o la fecha más reciente
+            # Buscar columna de fecha si existe para filtrar por fecha
             col_fecha = next((c for c in cols_vta if "FECHA" in str(c).upper()), None)
             
             if col_fecha:
@@ -174,7 +174,7 @@ if menu == "🔍 Consultar Inventario Real":
         cant_disp = len(df_resumen[df_resumen['Estado Stock'] == "🟢 Disponible"])
         cant_poco = len(df_resumen[df_resumen['Estado Stock'] == "🟡 Poco Stock"])
         cant_agotado = len(df_resumen[df_resumen['Estado Stock'] == "🔴 Agotado"])
-        cant_quiebre = len(df_resumen[df_resumen['Estado Stock'] == "⚠️️ Quiebre de Stock"])
+        cant_quiebre = len(df_resumen[df_resumen['Estado Stock'] == "⚠️ Quiebre de Stock"])
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Items", total_prod)
@@ -238,7 +238,6 @@ if menu == "🔍 Consultar Inventario Real":
                     busqueda_vta = st.text_input("🔎 Filtro específico para pedidos/clientes:", value=busqueda, key="busqueda_vta")
                 
                 with col_b2:
-                    # Opciones extraídas dinámicamente de los datos para garantizar coincidencia de caracteres
                     opciones_estados_vta = [e for e in df_vta_vista['Estado'].unique() if pd.notna(e)]
                     
                     filtro_estado_vta = st.multiselect(
