@@ -157,7 +157,7 @@ if menu == "🔍 Consultar Inventario Real":
 
         df_resumen['Estado Stock'] = df_resumen.apply(calcular_estado, axis=1)
 
-        # Mapa de Código -> Estado para enriquecer la vista de detalle
+        # Mapa de Código -> Estado exacto
         mapa_estados = dict(zip(df_resumen['__key_cod__'], df_resumen['Estado Stock']))
 
         if '__key_cod__' in df_resumen.columns:
@@ -174,7 +174,7 @@ if menu == "🔍 Consultar Inventario Real":
         cant_disp = len(df_resumen[df_resumen['Estado Stock'] == "🟢 Disponible"])
         cant_poco = len(df_resumen[df_resumen['Estado Stock'] == "🟡 Poco Stock"])
         cant_agotado = len(df_resumen[df_resumen['Estado Stock'] == "🔴 Agotado"])
-        cant_quiebre = len(df_resumen[df_resumen['Estado Stock'] == "⚠️ Quiebre de Stock"])
+        cant_quiebre = len(df_resumen[df_resumen['Estado Stock'] == "⚠️️ Quiebre de Stock"])
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Items", total_prod)
@@ -190,7 +190,8 @@ if menu == "🔍 Consultar Inventario Real":
         with col_f1:
             busqueda = st.text_input("🔎 Buscar por código, descripción o cliente:", value="", key="busqueda_principal")
         with col_f2:
-            filtro_estado = st.multiselect("Filtrar por Estado:", options=["🟢 Disponible", "🟡 Poco Stock", "🔴 Agotado", "⚠️ Quiebre de Stock"], key="filtro_estado_principal")
+            opciones_principales = [e for e in df_resumen['Estado Stock'].unique() if pd.notna(e)]
+            filtro_estado = st.multiselect("Filtrar por Estado:", options=opciones_principales, key="filtro_estado_principal")
 
         df_mostrar = df_resumen.copy()
 
@@ -235,10 +236,14 @@ if menu == "🔍 Consultar Inventario Real":
                 col_b1, col_b2 = st.columns([2, 1])
                 with col_b1:
                     busqueda_vta = st.text_input("🔎 Filtro específico para pedidos/clientes:", value=busqueda, key="busqueda_vta")
+                
                 with col_b2:
+                    # Opciones extraídas dinámicamente de los datos para garantizar coincidencia de caracteres
+                    opciones_estados_vta = [e for e in df_vta_vista['Estado'].unique() if pd.notna(e)]
+                    
                     filtro_estado_vta = st.multiselect(
                         "Filtrar por Estado:",
-                        options=["🟢 Disponible", "🟡 Poco Stock", "🔴 Agotado", "⚠️️ Quiebre de Stock"],
+                        options=opciones_estados_vta,
                         default=[],
                         key="filtro_estado_vta"
                     )
